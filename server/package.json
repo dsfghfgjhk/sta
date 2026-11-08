@@ -1,0 +1,9 @@
+{
+  "name": "sta-server",
+  "version": "1.0.0",
+  "description": "STA 온라인 서버 — 플레이어 위치·채팅·공격을 주고받는 웹소켓 서버",
+  "main": "server.js",
+  "scripts": { "start": "node server.js" },
+  "engines": { "node": ">=18" },
+  "dependencies": { "ws": "^8.18.0" }
+}
