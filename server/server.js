@@ -13,7 +13,7 @@ const server = http.createServer((req, res) => {
   res.writeHead(200, { 'content-type': 'text/plain; charset=utf-8', 'access-control-allow-origin': '*' });
   res.end(`STA 서버 작동 중 · 접속 ${clients.size}명`);
 });
-const wss = new WebSocketServer({ server, maxPayload: 4096 });
+const wss = new WebSocketServer({ server, maxPayload: 8192 });
 
 const cleanName = (s) => String(s || '').replace(/[\u0000-\u001f<>&"']/g, '').trim().slice(0, 12) || '익명';
 const cleanText = (s) => String(s || '').replace(/[\u0000-\u001f]/g, ' ').trim().slice(0, 80);
@@ -21,8 +21,8 @@ const num = (v, lo, hi) => { v = Number(v); return Number.isFinite(v) ? Math.min
 const send = (c, m) => { if (c.ws.readyState === 1) c.ws.send(typeof m === 'string' ? m : JSON.stringify(m)); };
 const broadcast = (m, except) => { const s = JSON.stringify(m); for (const c of clients.values()) if (c !== except) send(c, s); };
 
-// 상태 배열: [x, z, y, 방향, 속도, 모드(0 걸음·1 운전·2 동승·3 쓰러짐·4 넘어짐), 무기, 차종, 차색, 차 방향, 차 속도, 같이 탄 운전자 id, 체력, 가드]
-const STATE_LIMITS = [[-2000, 2000], [-2000, 2000], [-50, 200], [-100, 100], [-100, 100], [0, 4], [0, 9], [-1, 20], [0, 0xffffff], [-100, 100], [-100, 100], [0, 1e9], [0, 200], [0, 1]];
+// 상태 배열: [x, z, y, 방향, 속도, 모드(0 걸음·1 운전·2 동승·3 쓰러짐·4 넘어짐), 무기, 차종, 차색, 차 방향, 차 속도, 같이 탄 운전자 id, 체력, 가드, 일반차 담당 여부]
+const STATE_LIMITS = [[-2000, 2000], [-2000, 2000], [-50, 200], [-100, 100], [-100, 100], [0, 4], [0, 9], [-1, 20], [0, 0xffffff], [-100, 100], [-100, 100], [0, 1e9], [0, 200], [0, 1], [0, 1]];
 
 wss.on('connection', (ws) => {
   if (clients.size >= MAX_PLAYERS) { ws.send(JSON.stringify({ t: 'full' })); ws.close(); return; }
@@ -56,6 +56,12 @@ wss.on('connection', (ws) => {
         if (!c.ready) return;
         const k = String(m.k || '').slice(0, 8), a = Array.isArray(m.a) ? m.a.slice(0, 8).map(v => num(v, -5000, 5000)) : [];
         broadcast({ t: 'fx', id, k, a }, c);
+        break;
+      }
+      case 'w': { // 일반 차량: 이 지역을 맡은 플레이어가 자기 주변 차들 위치를 보냄 (차 한 대당 숫자 7개)
+        if (!c.ready || !Array.isArray(m.c)) return;
+        const cars = m.c.slice(0, 40 * 7).map(v => Math.round(num(v, -0xffffff, 0xffffff) * 100) / 100);
+        broadcast({ t: 'w', id, c: cars }, c);
         break;
       }
       case 'hit': { // 다른 플레이어를 맞힘 → 맞은 사람에게 전달

@@ -1571,7 +1571,7 @@ function spawnTraffic(v,px,pz,rmin,rmax,avoid){
 }
 function poolTick(){
   const px=P.inVeh?P.inVeh.x:P.x,pz=P.inVeh?P.inVeh.z:P.z,far=LOW?240:300;
-  for(const v of POOL.traffic){if(v.driver==='player'||v.driver==='angry'||v.driver==='amb')continue;const d=Math.hypot(v.x-px,v.z-pz);
+  for(const v of POOL.traffic){if(v.driver==='player'||v.driver==='angry'||v.driver==='amb'||NET.supp)continue;const d=Math.hypot(v.x-px,v.z-pz);
     if(d>far&&!camVisible(v.x,v.z,400))spawnTraffic(v,px,pz,110,far-30,true);
     else if(v.driver==='npc'&&Math.random()<0.15&&nearestEdge(v.x,v.z).d>14&&!camVisible(v.x,v.z,300))spawnTraffic(v,px,pz,110,far-30,true);
     else if(v.driver===null&&d>200&&!camVisible(v.x,v.z,300))spawnTraffic(v,px,pz,110,far-30,true);}
@@ -1592,6 +1592,7 @@ function aheadGap(v){
   for(const o of VEH)if(o!==v&&o.active)chk(o.x,o.z,o.t.wid,o.t.len,o);
   for(const p of PEDS)if(!p.hidden&&p.state!=='down')chk(p.x,p.z,0.8,0.6,p);
   if(!P.inVeh)chk(P.x,P.z,0.8,0.6,P);
+  for(const R of NET.players.values())if(R.seen&&R.mode===0)chk(R.x,R.z,0.8,0.6,R);
   return {g:best,who};
 }
 function steerTo(v,tx,tz){const d=angDiff(v.h,Math.atan2(tx-v.x,tz-v.z));return clamp(-d*2.4,-1,1);}
@@ -1754,7 +1755,7 @@ function actEnter(){
   if(P.inVeh){exitVehicle();return;}
   if(P.down>0)return;
   const v=nearVehicle();if(!v)return;
-  if(v.net){netRide(v);return;}
+  if(v.net){if(v.traffic)netTakeTraffic(v);else netRide(v);return;}
   if(v.driver==='police'){toast('경찰관이 타고 있어요.');return;}
   if(v.hp<=0){toast('불붙은 차는 탈 수 없어요.');return;}
   if(v.driver==='npc'){ejectDriver(v,pick(['내 차!!','도둑이야!','경찰 불러요!']));addWanted(1,'steal');}
@@ -2149,7 +2150,7 @@ function shootGun(w){
     tracer(ox,oy,oz,hx,hy,hz);
     if(r.kind||(A&&!T&&r.t>=ptD-0.1&&A.y<oy+6))emit('spark',hx,hy,hz,rnd(-2,2),rnd(1,3),rnd(-2,2),0.15,0.35,0.1,0xffe0a0);
     if(k===0)netSend({t:'fx',k:'shot',a:[ox,oy,oz,hx,hy,hz,ARM.i]});
-    if(r.kind==='ped')hurtPed(r.ent,w.dmg,dx,dz,'player',false);else if(r.kind==='net')netHit(r.ent,w.dmg,'gun',dx,dz);else if(r.kind==='veh'){if(r.ent.net)netHit(r.ent.owner,w.dmg*0.35,'gun',dx,dz);else hurtVehicle(r.ent,w.dmg*0.55,'player');}
+    if(r.kind==='ped')hurtPed(r.ent,w.dmg,dx,dz,'player',false);else if(r.kind==='net')netHit(r.ent,w.dmg,'gun',dx,dz);else if(r.kind==='veh'){if(r.ent.net){if(r.ent.owner)netHit(r.ent.owner,w.dmg*0.35,'gun',dx,dz);}else hurtVehicle(r.ent,w.dmg*0.55,'player');}
   }
   emit('fire',ox,oy,oz,0,0,0,0.05,0.5,0.95,0xffe08a);flashLight(ox,oy,oz,1.5,30);
   sfxGun(w.id,1);cam.shake=Math.max(cam.shake,w.id==='shotgun'?0.25:0.06);gunNoise(ox,oz);
@@ -2274,7 +2275,7 @@ function raycast(ox,oz,dx,dz,range,ignore){
 // ---------------------------------------------------------------- 온라인 (공용 서버)
 // 서버 주소: 배포한 STA 서버. 주소창에 ?server=wss://... 를 붙이면 그 서버로 접속해요.
 const STA_SERVER='wss://sta-server.onrender.com';
-const NET={ws:null,on:false,id:0,players:new Map(),sendT:0,tries:0,name:'',look:0,hitBy:0,hitT:-99};
+const NET={supp:false,traffic:new Map(),wT:0,ws:null,on:false,id:0,players:new Map(),sendT:0,tries:0,name:'',look:0,hitBy:0,hitT:-99};
 const NET_LOOKS=['#f28a1e','#3f7cc0','#d64545','#55a35a','#8a5cc0','#e2c044','#eeeeee','#2fb5b5'];
 NET_LOOKS.forEach((c,i)=>{STY['net'+i]={shirt:c,pants:'#2a3a5c',hair:'#141414',extra:'cap',speed:1};});
 const VT_LIST=Object.keys(VT),PUNCH_K=['jab','cross','hook','upper'];
@@ -2288,7 +2289,7 @@ function netConnect(){
   NET.ws=ws;netStat(NET.tries?'서버에 다시 연결하는 중…':'서버 연결하는 중… 서버가 자고 있으면 1분쯤 걸려요');
   ws.onopen=()=>{NET.tries=0;ws.send(JSON.stringify({t:'hello',name:NET.name,look:NET.look}));};
   ws.onmessage=e=>{let m;try{m=JSON.parse(e.data);}catch(_){return;}netMsg(m);};
-  ws.onclose=()=>{const was=NET.on;NET.on=false;NET.ws=null;if(P.rideV)netLeaveRide(true);for(const R of NET.players.values())netRemove(R);NET.players.clear();
+  ws.onclose=()=>{const was=NET.on;NET.on=false;NET.ws=null;if(P.rideV)netLeaveRide(true);for(const R of NET.players.values())netRemove(R);NET.players.clear();netSetSupp(false);
     if(was)feed('서버와 연결이 끊겼어요','sys');NET.tries++;
     if(NET.tries<=40){netStat(was||NET.everOn?'서버에 다시 연결하는 중…':'온라인 서버에 아직 연결 안 됨 · 혼자 하는 중 (계속 다시 시도해요)');setTimeout(netConnect,Math.min(15000,1500*NET.tries));}else netStat('혼자 하기 (서버에 연결할 수 없어요)');};
   ws.onerror=()=>{};
@@ -2301,7 +2302,8 @@ function netMsg(m){
     case 'leave':{const R=NET.players.get(m.id);if(R){netRemove(R);NET.players.delete(m.id);}feed(`${m.name}님이 나갔어요`,'sys');hudNet();break;}
     case 'snap':for(const a of m.p){if(a[0]===NET.id)continue;const R=NET.players.get(a[0]);if(R)netState(R,a);}break;
     case 'chat':{feed(m.text,'chat',m.name);const R=m.id===NET.id?P:NET.players.get(m.id);if(R)say(R,m.text,4);break;}
-    case 'fx':{const R=NET.players.get(m.id);if(R)netFx(R,m.k,m.a);break;}
+    case 'fx':{if(m.k==='take'){if((m.a[0]|0)===NET.id){const v=POOL.traffic[m.a[1]|0];if(v&&v.driver==='npc')v.setActive(false);}break;}const R=NET.players.get(m.id);if(R)netFx(R,m.k,m.a);break;}
+    case 'w':netTraffic(m.id,m.c);break;
     case 'hit':netGotHit(m);break;
     case 'ko':if(m.by===NET.id)feed(`${m.name}님을 쓰러뜨렸어요!`,'ko');else if(m.id!==NET.id)feed(m.byName?`${m.byName} → ${m.name} 쓰러뜨림`:`${m.name}님이 쓰러졌어요`,'ko');else if(m.byName)feed(`${m.byName}님에게 당했어요`,'ko');break;
     case 'ride':feed(m.on?`${m.name}님이 내 차에 탔어요`:`${m.name}님이 내 차에서 내렸어요`,'sys');break;
@@ -2314,10 +2316,10 @@ function nameSprite(name,col){const c=cnv(256,64),g=c.getContext('2d');g.font='8
 function netAdd(id,name,look){if(NET.players.has(id))return;look=(look|0)%8;const m=personMesh('net'+look,true);m.grp.visible=false;scene.add(m.grp);
   const lab=nameSprite(name,NET_LOOKS[look]);lab.visible=false;scene.add(lab);
   NET.players.set(id,{id,name,look,m,lab,x:0,y:0,z:0,h:0,tx:0,ty:0,tz:0,th:0,sp:0,mode:0,wpn:0,hp:100,guard:0,phase:0,veh:null,vt:-1,vcol:0,seen:false,aimT:0,isNet:true});hudNet();}
-function netRemove(R){scene.remove(R.m.grp);scene.remove(R.lab);if(R.veh)netDropVeh(R);}
+function netRemove(R){scene.remove(R.m.grp);scene.remove(R.lab);if(R.veh)netDropVeh(R);for(const [k,g] of NET.traffic)if(g.from===R.id){removeVehicle(g.v);NET.traffic.delete(k);}}
 function netTarget(R){return R.seen&&R.m.grp.visible&&R.mode!==3;}
 function netState(R,a){
-  R.tx=a[1];R.tz=a[2];R.ty=a[3];R.th=a[4];R.sp=a[5];R.mode=a[6]|0;R.wpn=a[7]|0;R.hp=a[13];R.guard=a[14];
+  R.tx=a[1];R.tz=a[2];R.ty=a[3];R.th=a[4];R.sp=a[5];R.mode=a[6]|0;R.wpn=a[7]|0;R.hp=a[13];R.guard=a[14];R.auth=a[15]!==0;
   if(!R.seen){R.x=R.tx;R.z=R.tz;R.y=R.ty;R.h=R.th;R.seen=true;}
   const vt=a[8]|0;
   if(R.mode===1&&vt>=0&&VT_LIST[vt]){
@@ -2327,7 +2329,8 @@ function netState(R,a){
 }
 function netDropVeh(R){const v=R.veh;if(!v)return;if(P.rideV===v)netLeaveRide(true);removeVehicle(v);R.veh=null;R.vt=-1;}
 function netTick(dt){
-  if(!NET.on)return;
+  if(!NET.on){if(NET.supp)netSetSupp(false);return;}
+  netTrafficTick(dt);
   NET.sendT-=dt;if(NET.sendT<=0){NET.sendT=1/12;netSend({t:'s',s:netMyState()});}
   const k=Math.min(1,dt*10);
   for(const R of NET.players.values()){
@@ -2346,10 +2349,44 @@ function netTick(dt){
     if(R.mode===2)R.lab.visible=false;
   }
 }
+// 일반 차: 가까이 있는 플레이어 중 번호가 가장 작은 사람이 그 동네 차들을 몰고, 나머지는 그 차들을 받아서 보여 줘요
+function netAuthority(){
+  const mx=P.inVeh?P.inVeh.x:P.x,mz=P.inVeh?P.inVeh.z:P.z,lim=NET.supp?340:280;let best=null;
+  for(const R of NET.players.values()){if(!R.seen||!R.auth||R.id>NET.id)continue;const d=Math.hypot((R.veh?R.veh.x:R.x)-mx,(R.veh?R.veh.z:R.z)-mz);if(d<lim&&(!best||R.id<best.id))best=R;}
+  return best;
+}
+function netSetSupp(on){
+  if(NET.supp===on)return;NET.supp=on;
+  for(const v of POOL.traffic){if(v.driver!=='npc'&&v.driver!==null)continue;
+    if(on)v.setActive(false);else{v.setActive(true);let ok=false;for(let k=0;k<20&&!ok;k++)ok=spawnTraffic(v,P.x,P.z,60,260+k*10,true);if(!ok)v.setActive(false);}}
+  if(!on){for(const g of NET.traffic.values())removeVehicle(g.v);NET.traffic.clear();}
+}
+function netTraffic(from,c){
+  if(!NET.supp||!NET.authR||NET.authR.id!==from)return;
+  const now=S.time;
+  for(let i=0;i+6<c.length;i+=7){const key=from+':'+c[i],type=VT_LIST[c[i+1]|0];if(!type)continue;let g=NET.traffic.get(key);
+    if(!g||g.v.type!==type||g.col!==c[i+2]){if(g)removeVehicle(g.v);const v=new Vehicle(type,'#'+((c[i+2]|0)>>>0).toString(16).padStart(6,'0'),'net');v.net=true;v.driver='net';v.traffic=true;v.place(c[i+3],c[i+4],c[i+5]);riderFor(v,'npc');g={v,col:c[i+2],from,idx:c[i]|0};NET.traffic.set(key,g);}
+    const v=g.v;v.tx=c[i+3];v.tz=c[i+4];v.th=c[i+5];v.tvF=c[i+6];g.seen=now;}
+}
+function netTrafficTick(dt){
+  const auth=netAuthority();NET.authR=auth;netSetSupp(!!auth);
+  if(!NET.supp){NET.wT-=dt;if(NET.wT<=0){NET.wT=0.12;const mx=P.inVeh?P.inVeh.x:P.x,mz=P.inVeh?P.inVeh.z:P.z,c=[];
+      POOL.traffic.forEach((v,i)=>{if(!v.active||v.driver!=='npc'||c.length>=280)return;if(Math.hypot(v.x-mx,v.z-mz)>270)return;c.push(i,VT_LIST.indexOf(v.type),new THREE.Color(v.color||'#888888').getHex(),v.x,v.z,wrapA(v.h),v.vF);});
+      if(c.length||NET.players.size)netSend({t:'w',c});}}
+  const k=Math.min(1,dt*10);
+  for(const [key,g] of NET.traffic){const v=g.v;if(S.time-g.seen>1.5){removeVehicle(v);NET.traffic.delete(key);continue;}
+    v.x+=(v.tx-v.x)*k;v.z+=(v.tz-v.z)*k;const dh=angDiff(v.h,v.th);v.h+=dh*k;v.yawRate=dh*6;v.vF=v.tvF||0;v.vx=Math.sin(v.h)*v.vF;v.vz=Math.cos(v.h)*v.vF;v.input.steer=clamp(-dh*4,-1,1);}
+}
+function netTakeTraffic(v){
+  let g=null;for(const x of NET.traffic.values())if(x.v===v)g=x;if(!g)return;
+  netSend({t:'fx',k:'take',a:[g.from,g.idx]});NET.traffic.delete(g.from+':'+g.idx);
+  const nv=new Vehicle(v.type,v.color,'spawned');nv.place(v.x,v.z,v.h);nv.vx=v.vx;nv.vz=v.vz;SPAWNED.push(nv);removeVehicle(v);
+  nv.driver='player';P.inVeh=nv;P.mesh.grp.visible=false;riderFor(nv,'player');addWanted(1,'steal');sfxDoor();
+}
 function netMyState(){
   const v=P.inVeh,mode=S.mode==='dead'?3:P.rideV?2:v?1:P.down>0?4:0;
   const col=v?new THREE.Color(v.color||'#888888').getHex():0;
-  return [v?v.x:P.x,v?v.z:P.z,v?v.y:(P.y||0),wrapA(P.h),Math.hypot(P.vx||0,P.vz||0),mode,ARM.i,v?VT_LIST.indexOf(v.type):-1,col,v?wrapA(v.h):0,v?v.vF:0,P.rideV?P.rideV.owner.id:0,Math.round(S.hp),(P.mesh.fw||0)>0.5?1:0];
+  return [v?v.x:P.x,v?v.z:P.z,v?v.y:(P.y||0),wrapA(P.h),Math.hypot(P.vx||0,P.vz||0),mode,ARM.i,v?VT_LIST.indexOf(v.type):-1,col,v?wrapA(v.h):0,v?v.vF:0,P.rideV?P.rideV.owner.id:0,Math.round(S.hp),(P.mesh.fw||0)>0.5?1:0,NET.supp?0:1];
 }
 function netFx(R,k,a){
   const near=Math.hypot(R.x-P.x,R.z-P.z);
@@ -2797,7 +2834,7 @@ function hudTick(dt){
   else H.speedo.hidden=true;
   let pr='';
   if(P.rideV)pr=(TOUCH?'':'<kbd>F</kbd>')+'내리기 · '+P.rideV.owner.name+'님 차';
-  else if(!P.inVeh&&P.down<=0){const v=nearVehicle();if(v){if(v.net)pr=(TOUCH?'':'<kbd>F</kbd>')+'같이 타기 · '+v.owner.name+'님 '+v.t.name;else{const own=v.driver==='npc'?' (빼앗기)':v.driver==='police'?'':'';pr=v.driver==='police'?'':(TOUCH?'':'<kbd>F</kbd>')+'타기 · '+v.t.name+own;}}}
+  else if(!P.inVeh&&P.down<=0){const v=nearVehicle();if(v){if(v.net&&v.owner)pr=(TOUCH?'':'<kbd>F</kbd>')+'같이 타기 · '+v.owner.name+'님 '+v.t.name;else if(v.net)pr=(TOUCH?'':'<kbd>F</kbd>')+'타기 · '+v.t.name+' (빼앗기)';else{const own=v.driver==='npc'?' (빼앗기)':v.driver==='police'?'':'';pr=v.driver==='police'?'':(TOUCH?'':'<kbd>F</kbd>')+'타기 · '+v.t.name+own;}}}
   else if(P.inVeh&&Math.abs(P.inVeh.vF)<1&&!TOUCH)pr='<kbd>F</kbd>내리기';
   if(S.bustT>0)pr='멈춰 있으면 체포돼요!';
   if(H.prompt.dataset.v!==pr){H.prompt.dataset.v=pr;H.prompt.innerHTML=pr;H.prompt.classList.toggle('on',!!pr);}
